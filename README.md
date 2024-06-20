@@ -1,5 +1,15 @@
 # Egress Gateway Examples
 
+## Background on Istio resources
+
+1. VirtualService: An Istio custom resource that defines the rules for how requests for a service are routed within the service mesh (traffic spliting, request routing, retries, timeouts, fault injections, etc.)
+
+2. DestinationRule: An Istio custom resource that defines policies that apply to traffic intended for a service _after_ routing has occurred (load balancing, connection pool settings, outlier detection, tls settings).
+
+3. ServiceEntry: An Istio custom resource that add additional entries to the internal service registry that Istio maintains. This is used to enable access to external services not in the mesh.
+
+4. Gateway: An Istio custom resource configures a load balancer for HTTP/TCP traffic. This can be used to manage ingress traffic coming to the mesh and egress traffic leaving the mesh.
+
 ## Environment setup
 
 1. Create a kind cluster
@@ -77,11 +87,13 @@ Note: You can change the protocol to use HTTPS
  kubectl exec curl -n curl -c curl -- curl -sS http://httpbin.org/headers
 ```
 
+You could also use a DestinationRule to configure TLS origination at the sidecar.  
+
 Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
 
 ## Basic Egress Gateway Setup
 
-### HTTP 
+### HTTP (Egress, but insecure) and HTTPS (Egress, but secure)
 
 1. Create ServiceEntry
 
@@ -90,7 +102,7 @@ kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
 metadata:
-  name: httpbin-https
+  name: httpbin-with-egress
 spec:
   hosts:
   - httpbin.org
@@ -105,7 +117,7 @@ spec:
 EOF
 ```
 
-2. Send request
+2. Send request with just the ServiceEntry
 
 ```
 ❯  kubectl exec curl -n curl -c curl -- curl -sS https://httpbin.org/headers
@@ -170,17 +182,236 @@ Send a http request:
 }
 ```
 
-### HTTPS originated at sidecar (passthrough at egress)
+### HTTPS throughout: Egress and secure
+
+Same setup as before with httpbin and ServiceEntry, but now let's use HTTPS 
+
+```
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: https-istio-egressgateway
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+  - port:
+      number: 443
+      name: httpS
+      protocol: HTTPS
+    hosts:
+    - httpbin.org
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: egressgateway-for-httpbin
+spec:
+  host: istio-egressgateway.istio-system.svc.cluster.local
+  subsets:
+  - name: httpbin
+EOF
+```
+
+### HTTPS originate at gateway
+
+1. Use the same httpbin and ServiceEntry as before.
 
 
+2. Apply a Gateway and DestinationRule  
+```
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: origination-istio-egressgateway
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+  - port:
+      number: 80
+      name: https-port-for-tls-origination
+      protocol: HTTPS
+    hosts:
+    - httpbin.org
+    tls:
+      mode: ISTIO_MUTUAL
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: egressgateway-for-httpbin
+spec:
+  host: istio-egressgateway.istio-system.svc.cluster.local
+  subsets:
+  - name: httpbin
+    trafficPolicy:
+      loadBalancer:
+        simple: ROUND_ROBIN
+      portLevelSettings:
+      - port:
+          number: 80
+        tls:
+          mode: ISTIO_MUTUAL
+          sni: httpbin.prg
+EOF
+```
 
-### HTTPS to HTTP (secure in mesh, still can apply policy)
+3. Configure route rules to direct traffic through the egress gateway:
 
-1. 
+```
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: direct-httpbin-through-egress-gateway
+spec:
+  hosts:
+  - httpbin
+  gateways:
+  - istio-egressgateway
+  - mesh
+  http:
+  - match:
+    - gateways:
+      - mesh
+      port: 80
+    route:
+    - destination:
+        host: istio-egressgateway.istio-system.svc.cluster.local
+        subset: httpbin
+        port:
+          number: 80
+      weight: 100
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 80
+    route:
+    - destination:
+        host: httpbin.org
+        port:
+          number: 443
+      weight: 100
+EOF
+```
 
-### HTTPS originate at gateway (mtls throughout, new origination at Gateway)
+5. Define a DestinationRule to perform TLS origination for requests to `httpbin`` host:
 
-1. 
+```
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: originate-tls-for-edition-httpbin
+spec:
+  host: httpbin
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    portLevelSettings:
+    - port:
+        number: 443
+      tls:
+        mode: SIMPLE # initiates HTTPS for connections to httpbin host
+EOF
+```
+
+### TLS Passthrough 
+
+TODO: not fully working?
+
+Tecnically possible?*** This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
+
+Use same ServiceEntry as before for httpbin and the same setup as the previous steps.
+
+```
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: passthrough-istio-egressgateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: egressgateway 
+  servers:
+  - port:
+      number: 443
+      name: tls
+      protocol: TLS
+    tls:
+      mode: PASSTHROUGH
+    hosts:
+    - httpbin.org
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: passthrough-example
+  namespace: istio-system
+spec:
+  host: external.example.com
+  subsets:
+  - name: httpbin
+  trafficPolicy:
+    tls:
+      mode: DISABLE # What should this be?
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: passthrough-route-egress-gateway
+  namespace: istio-system
+spec:
+  hosts:
+  - external.example.com
+  gateways:
+  - istio-egressgateway
+  - mesh
+  tls:
+  - match:
+    - port: 443
+      sniHosts:
+      - httpbin.org
+    route:
+    - destination:
+        host: httpbin.org
+        port:
+          number: 443
+        subset: httpbin
+---
+EOF
+```
+
+### What about mTLS? 
+
+DestinationRule can be configured to also perform mTLS orgination.
+
+```
+kubectl apply -n istio-system -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: originate-mtls-for-httpbin
+spec:
+  host: httpbin
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    portLevelSettings:
+    - port:
+        number: 443
+      tls:
+        mode: MUTUAL
+        credentialName: client-credential # this must match the secret created earlier to hold client certs
+        sni: httpbin 
+        # subjectAltNames: # can be enabled if the certificate was generated with SAN
+        # - httpbin
+EOF
+```
 
 ### Additional notes with egress gateways 
 
