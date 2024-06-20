@@ -14,24 +14,25 @@
 
 1. Create a kind cluster
 
-```
+```shell
 kind create cluster
 ```
 
 2. Install Istio
 
-```
+```shell
 istioctl install --set profile=minimal \
  --set "components.egressGateways[0].name=istio-egressgateway" \
  --set "components.egressGateways[0].enabled=true" \
- --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY 
+ --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY \
+ --set meshConfig.accessLogFile=/dev/stdout
 ```
 
 Note: To allow all traffic (not restricted to the service registry) you can use `--set "meshConfig.outboundTrafficPolicy.mode=ALLOW_ANY"`. The drawback here is you lose Istio monitoring and control for traffic to external services. 
 
 3. Apply example apps 
 
-```
+```shell
 kubectl apply -f example-apps.yaml
 ```
 
@@ -39,65 +40,9 @@ kubectl apply -f example-apps.yaml
 
 Because we have Istio installed with `meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY` we can defined a ServiceEntry and still have Istio traffic control (VirtualServices, etc.) and monitoring features. 
 
-1. Apply a ServiceEntry to an external HTTP service.
+1. Create ServiceEntry to an external service (https://httpbin.org/)
 
-```
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1alpha3
-kind: ServiceEntry
-metadata:
-  name: httpbin-ext
-spec:
-  hosts:
-  - httpbin.org
-  ports:
-  - number: 80
-    name: http
-    protocol: HTTP
-  resolution: DNS
-  location: MESH_EXTERNAL
-EOF
-```
-
-Or slightly more fun solo example (but the request isn't as pretty):
-
-```
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1alpha3
-kind: ServiceEntry
-metadata:
-  name: solo
-spec:
-  hosts:
-  - docs.solo.io
-  ports:
-  - number: 80
-    name: http
-    protocol: HTTPS
-  resolution: DNS
-  location: MESH_EXTERNAL
-EOF
-```
-
-Note: You can change the protocol to use HTTPS
-
-2. Send some test traffic
-
-```
- kubectl exec curl -n curl -c curl -- curl -sS http://httpbin.org/headers
-```
-
-You could also use a DestinationRule to configure TLS origination at the sidecar.  
-
-Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
-
-## Basic Egress Gateway Setup
-
-### HTTP (Egress, but insecure) and HTTPS (Egress, but secure)
-
-1. Create ServiceEntry
-
-```
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
@@ -117,23 +62,41 @@ spec:
 EOF
 ```
 
-2. Send request with just the ServiceEntry
+2. Send an HTTP request with just the ServiceEntry
 
+```shell
+kubectl exec curl -n curl -c curl -- curl -sS http://httpbin.org/headers
 ```
-❯  kubectl exec curl -n curl -c curl -- curl -sS https://httpbin.org/headers
+
+And see the `X-Envoy-Peer-Metadata-Id` is set to the envoy sidecar id: 
+
+```json
 {
   "headers": {
     "Accept": "*/*",
     "Host": "httpbin.org",
     "User-Agent": "curl/7.83.1-DEV",
-    "X-Amzn-Trace-Id": "Root=1-6670e51c-3fe5da0a44ed4a1651ef2789"
+    "X-Amzn-Trace-Id": "Root=1-66748394-059ea3a4078cc9b25550b4f0",
+    "X-Envoy-Attempt-Count": "1",
+    "X-Envoy-Decorator-Operation": "httpbin.org:80/*",
+    "X-Envoy-Peer-Metadata": "ChgKDkFQUF9DT05UQUlORVJTEgYaBGN1cmwKGgoKQ0xVU1RFUl9JRBIMGgpLdWJlcm5ldGVzChwKDElOU1RBTkNFX0lQUxIMGgoxMC4yNDQuMC44ChkKDUlTVElPX1ZFUlNJT04SCBoGMS4yMi4xCqwBCgZMQUJFTFMSoQEqngEKDQoDYXBwEgYaBGN1cmwKJAoZc2VjdXJpdHkuaXN0aW8uaW8vdGxzTW9kZRIHGgVpc3RpbwopCh9zZXJ2aWNlLmlzdGlvLmlvL2Nhbm9uaWNhbC1uYW1lEgYaBGN1cmwKKwojc2VydmljZS5pc3Rpby5pby9jYW5vbmljYWwtcmV2aXNpb24SBBoCdjEKDwoHdmVyc2lvbhIEGgJ2MQoaCgdNRVNIX0lEEg8aDWNsdXN0ZXIubG9jYWwKDgoETkFNRRIGGgRjdXJsChMKCU5BTUVTUEFDRRIGGgRjdXJsCjkKBU9XTkVSEjAaLmt1YmVybmV0ZXM6Ly9hcGlzL3YxL25hbWVzcGFjZXMvY3VybC9wb2RzL2N1cmwKFwoNV09SS0xPQURfTkFNRRIGGgRjdXJs",
+    "X-Envoy-Peer-Metadata-Id": "sidecar~10.244.0.8~curl.curl~curl.svc.cluster.local"
   }
 }
 ```
 
-3. Apply config
+You could also use a DestinationRule to configure TLS origination at the sidecar.  
 
-```
+Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
+
+## Basic Egress Gateway Setup
+
+### HTTP (Egress, but insecure) and HTTPS (Egress, but secure)
+
+
+1. Apply config
+
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
@@ -151,42 +114,89 @@ spec:
     - httpbin.org
 ---
 apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
+kind: VirtualService
 metadata:
-  name: egressgateway-for-httpbin
+  name: direct-httpbin-through-egress-gateway
 spec:
-  host: istio-egressgateway.istio-system.svc.cluster.local
-  subsets:
-  - name: httpbin
+  hosts:
+  - httpbin.org
+  gateways:
+  - istio-egressgateway
+  - mesh
+  http:
+  - match:
+    - gateways:
+      - mesh
+      port: 80
+    route:
+    - destination:
+        host: istio-egressgateway.istio-system.svc.cluster.local
+        port:
+          number: 80
+      weight: 100
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 80
+    route:
+    - destination:
+        host: httpbin.org
+        port:
+          number: 80
+      weight: 100
 EOF
 ```
 
-Send a http request:
+2. Send a http request as before:
 
+```shell
+ kubectl exec curl -n curl -c curl -- curl -sS http://httpbin.org/headers -v
 ```
+
+```json
 ❯  kubectl exec curl -n curl -c curl -- curl -sS http://httpbin.org/headers
 {
   "headers": {
     "Accept": "*/*",
     "Host": "httpbin.org",
     "User-Agent": "curl/7.83.1-DEV",
-    "X-Amzn-Trace-Id": "Root=1-6670e534-0c7784dc4873c5027a1fa4a8",
+    "X-Amzn-Trace-Id": "Root=1-66749cec-43439da96886030229341615",
+    "X-B3-Parentspanid": "ec464d39b856dc0e",
     "X-B3-Sampled": "0",
-    "X-B3-Spanid": "e5cb8d05eee4d954",
-    "X-B3-Traceid": "356130e1abbc75f4e5cb8d05eee4d954",
+    "X-B3-Spanid": "3f2f2c89b87b9308",
+    "X-B3-Traceid": "5d6717bdef5bd9bcec464d39b856dc0e",
     "X-Envoy-Attempt-Count": "1",
     "X-Envoy-Decorator-Operation": "httpbin.org:80/*",
-    "X-Envoy-Peer-Metadata": "ChgKDkFQUF9DT05UQUlORVJTEgYaBGN1cmwKGgoKQ0xVU1RFUl9JRBIMGgpLdWJlcm5ldGVzChwKDElOU1RBTkNFX0lQUxIMGgoxMC4yNDQuMC45ChkKDUlTVElPX1ZFUlNJT04SCBoGMS4xOS4wCqwBCgZMQUJFTFMSoQEqngEKDQoDYXBwEgYaBGN1cmwKJAoZc2VjdXJpdHkuaXN0aW8uaW8vdGxzTW9kZRIHGgVpc3RpbwopCh9zZXJ2aWNlLmlzdGlvLmlvL2Nhbm9uaWNhbC1uYW1lEgYaBGN1cmwKKwojc2VydmljZS5pc3Rpby5pby9jYW5vbmljYWwtcmV2aXNpb24SBBoCdjEKDwoHdmVyc2lvbhIEGgJ2MQoaCgdNRVNIX0lEEg8aDWNsdXN0ZXIubG9jYWwKDgoETkFNRRIGGgRjdXJsChMKCU5BTUVTUEFDRRIGGgRjdXJsCjkKBU9XTkVSEjAaLmt1YmVybmV0ZXM6Ly9hcGlzL3YxL25hbWVzcGFjZXMvY3VybC9wb2RzL2N1cmwKFwoNV09SS0xPQURfTkFNRRIGGgRjdXJs",
-    "X-Envoy-Peer-Metadata-Id": "sidecar~10.244.0.9~curl.curl~curl.svc.cluster.local"
+    "X-Envoy-Internal": "true",
+    "X-Envoy-Peer-Metadata": "ChoKCkNMVVNURVJfSUQSDBoKS3ViZXJuZXRlcwocCgxJTlNUQU5DRV9JUFMSDBoKMTAuMjQ0LjAuNgoZCg1JU1RJT19WRVJTSU9OEggaBjEuMTkuMAqYAwoGTEFCRUxTEo0DKooDChwKA2FwcBIVGhNpc3Rpby1lZ3Jlc3NnYXRld2F5ChMKBWNoYXJ0EgoaCGdhdGV3YXlzChQKCGhlcml0YWdlEggaBlRpbGxlcgo2CilpbnN0YWxsLm9wZXJhdG9yLmlzdGlvLmlvL293bmluZy1yZXNvdXJjZRIJGgd1bmtub3duChgKBWlzdGlvEg8aDWVncmVzc2dhdGV3YXkKGQoMaXN0aW8uaW8vcmV2EgkaB2RlZmF1bHQKLwobb3BlcmF0b3IuaXN0aW8uaW8vY29tcG9uZW50EhAaDkVncmVzc0dhdGV3YXlzChIKB3JlbGVhc2USBxoFaXN0aW8KOAofc2VydmljZS5pc3Rpby5pby9jYW5vbmljYWwtbmFtZRIVGhNpc3Rpby1lZ3Jlc3NnYXRld2F5Ci8KI3NlcnZpY2UuaXN0aW8uaW8vY2Fub25pY2FsLXJldmlzaW9uEggaBmxhdGVzdAoiChdzaWRlY2FyLmlzdGlvLmlvL2luamVjdBIHGgVmYWxzZQoaCgdNRVNIX0lEEg8aDWNsdXN0ZXIubG9jYWwKLgoETkFNRRImGiRpc3Rpby1lZ3Jlc3NnYXRld2F5LTU3YzQ0Zjk5YmMtdzlrbnMKGwoJTkFNRVNQQUNFEg4aDGlzdGlvLXN5c3RlbQpcCgVPV05FUhJTGlFrdWJlcm5ldGVzOi8vYXBpcy9hcHBzL3YxL25hbWVzcGFjZXMvaXN0aW8tc3lzdGVtL2RlcGxveW1lbnRzL2lzdGlvLWVncmVzc2dhdGV3YXkKJgoNV09SS0xPQURfTkFNRRIV* Connection #0 to host httpbin.org left intact
+GhNpc3Rpby1lZ3Jlc3NnYXRld2F5",
+    "X-Envoy-Peer-Metadata-Id": "router~10.244.0.6~istio-egressgateway-57c44f99bc-w9kns.istio-system~istio-system.svc.cluster.local"
   }
 }
+```
+
+Notice now the `X-Envoy-Peer-Metadata-Id` has the egressgateway id. 
+
+3. Check the request went through the egress gateway. 
+
+```shell
+kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
+```
+
+```
+[2024-06-20T21:19:40.721Z] "GET /headers HTTP/2" 200 - via_upstream - "-" 0 1619 689 81 "10.244.0.8" "curl/7.83.1-DEV" "0192212c-94e1-412f-9a5a-1b3273e82eaf" "httpbin.org" "18.211.234.122:80" outbound|80||httpbin.org 10.244.0.6:60186 10.244.0.6:8080 10.244.0.8:50860 - -
+```
+
+This shows up because when we installed Istio, we included this config to enable the access logs to be output:
+```shell
+ --set meshConfig.accessLogFile=/dev/stdout
 ```
 
 ### HTTPS throughout: Egress and secure
 
 Same setup as before with httpbin and ServiceEntry, but now let's use HTTPS 
 
-```
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
@@ -220,7 +230,7 @@ EOF
 
 
 2. Apply a Gateway and DestinationRule  
-```
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
@@ -261,7 +271,7 @@ EOF
 
 3. Configure route rules to direct traffic through the egress gateway:
 
-```
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
@@ -300,7 +310,7 @@ EOF
 
 5. Define a DestinationRule to perform TLS origination for requests to `httpbin`` host:
 
-```
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: DestinationRule
@@ -327,7 +337,7 @@ Tecnically possible?*** This setup is useful when you want to enforce policies a
 
 Use same ServiceEntry as before for httpbin and the same setup as the previous steps.
 
-```
+```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
@@ -390,7 +400,7 @@ EOF
 
 DestinationRule can be configured to also perform mTLS orgination.
 
-```
+```yaml
 kubectl apply -n istio-system -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: DestinationRule
