@@ -56,8 +56,8 @@ spec:
     name: http-port
     protocol: HTTP
   - number: 443
-    name: https
-    protocol: HTTPS
+    name: tls
+    protocol: TLS
   resolution: DNS
 EOF
 ```
@@ -92,7 +92,6 @@ Note: This configuration example does not enable secure egress traffic control i
 ## Basic Egress Gateway Setup
 
 ### HTTP (Egress, but insecure) and HTTPS (Egress, but secure)
-
 
 1. Apply config
 
@@ -192,50 +191,105 @@ This shows up because when we installed Istio, we included this config to enable
  --set meshConfig.accessLogFile=/dev/stdout
 ```
 
-### HTTPS throughout: Egress and secure
+### HTTPS throughout via PASSTHROUGH: Egress and secure
 
-Same setup as before with httpbin and ServiceEntry, but now let's use HTTPS 
+This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
+
+1. Use the same setup as before with httpbin ServiceEntry, but now let's use HTTPS in the Gateway:
 
 ```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
 metadata:
-  name: https-istio-egressgateway
+  name: istio-egressgateway
 spec:
   selector:
     istio: egressgateway
   servers:
   - port:
-      number: 443
-      name: httpS
-      protocol: HTTPS
+      number: 443 # Now use the TLS port
+      name: tls 
+      protocol: TLS
     hosts:
     - httpbin.org
+    tls: # Set the TLS mode here
+      mode: PASSTHROUGH
 ---
 apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
+kind: VirtualService
 metadata:
-  name: egressgateway-for-httpbin
+  name: direct-httpbin-through-egress-gateway
 spec:
-  host: istio-egressgateway.istio-system.svc.cluster.local
-  subsets:
-  - name: httpbin
+  hosts:
+  - httpbin.org
+  gateways:
+  - mesh
+  - istio-egressgateway
+  tls:
+  - match:
+    - gateways:
+      - mesh
+      port: 443 # Use the TLS port here 
+      sniHosts: # Specify the SNI for validation and routing at the egress gateway
+      - httpbin.org
+    route:
+    - destination:
+        host: istio-egressgateway.istio-system.svc.cluster.local
+        port:
+          number: 443
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 443
+      sniHosts:
+      - httpbin.org
+    route:
+    - destination:
+        host: httpbin.org
+        port:
+          number: 443
+      weight: 100
 EOF
 ```
 
-### HTTPS originate at gateway
+2. Send a request using https:
 
-1. Use the same httpbin and ServiceEntry as before.
+```shell
+❯ kubectl exec curl -n curl -c curl -- curl -sSL -o /dev/null -D - https://httpbin.org/headers
+HTTP/2 200
+date: Thu, 20 Jun 2024 21:39:23 GMT
+content-type: application/json
+content-length: 177
+server: gunicorn/19.9.0
+access-control-allow-origin: *
+access-control-allow-credentials: true
+```
+
+3. Check the egress gateway logs to make sure we're going through the gateway:
+```shell
+kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system -f
+```
+
+You should see `outbound|443` which indicates we are using the TLS port.
+
+```shell
+[2024-06-20T21:39:23.441Z] "- - -" 0 - - - "-" 940 5946 217 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:56320 10.244.0.6:8443 10.244.0.8:35674 httpbin.org -
+```
+
+### TLS origination at egress gateway
+
+# TODO: debug
+
+1. Use the same httpbin ServiceEntry as before, but now let's get have the egress gateway do some TLS. In order to configure the TLS traffic policy, we'll need a new resource- a `DestinationRule. Apply the Gateway, VirtualService and two DestinationRule:
 
 
-2. Apply a Gateway and DestinationRule  
 ```yaml
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
 metadata:
-  name: origination-istio-egressgateway
+  name: istio-egressgateway
 spec:
   selector:
     istio: egressgateway
@@ -243,7 +297,7 @@ spec:
   - port:
       number: 80
       name: https-port-for-tls-origination
-      protocol: HTTPS
+      protocol: TLS
     hosts:
     - httpbin.org
     tls:
@@ -258,28 +312,20 @@ spec:
   subsets:
   - name: httpbin
     trafficPolicy:
-      loadBalancer:
-        simple: ROUND_ROBIN
       portLevelSettings:
       - port:
           number: 80
         tls:
           mode: ISTIO_MUTUAL
-          sni: httpbin.prg
-EOF
-```
-
-3. Configure route rules to direct traffic through the egress gateway:
-
-```yaml
-kubectl apply -f - <<EOF
+          sni: httpbin.org
+---
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
 metadata:
   name: direct-httpbin-through-egress-gateway
 spec:
   hosts:
-  - httpbin
+  - httpbin.org
   gateways:
   - istio-egressgateway
   - mesh
@@ -305,94 +351,19 @@ spec:
         port:
           number: 443
       weight: 100
-EOF
-```
-
-5. Define a DestinationRule to perform TLS origination for requests to `httpbin`` host:
-
-```yaml
-kubectl apply -f - <<EOF
+---
 apiVersion: networking.istio.io/v1alpha3
 kind: DestinationRule
 metadata:
-  name: originate-tls-for-edition-httpbin
+  name: originate-tls-for-httpbin
 spec:
-  host: httpbin
+  host: httpbin.org
   trafficPolicy:
-    loadBalancer:
-      simple: ROUND_ROBIN
     portLevelSettings:
     - port:
         number: 443
       tls:
-        mode: SIMPLE # initiates HTTPS for connections to httpbin host
-EOF
-```
-
-### TLS Passthrough 
-
-TODO: not fully working?
-
-Tecnically possible?*** This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
-
-Use same ServiceEntry as before for httpbin and the same setup as the previous steps.
-
-```yaml
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1alpha3
-kind: Gateway
-metadata:
-  name: passthrough-istio-egressgateway
-  namespace: istio-system
-spec:
-  selector:
-    istio: egressgateway 
-  servers:
-  - port:
-      number: 443
-      name: tls
-      protocol: TLS
-    tls:
-      mode: PASSTHROUGH
-    hosts:
-    - httpbin.org
----
-apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
-metadata:
-  name: passthrough-example
-  namespace: istio-system
-spec:
-  host: external.example.com
-  subsets:
-  - name: httpbin
-  trafficPolicy:
-    tls:
-      mode: DISABLE # What should this be?
----
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  name: passthrough-route-egress-gateway
-  namespace: istio-system
-spec:
-  hosts:
-  - external.example.com
-  gateways:
-  - istio-egressgateway
-  - mesh
-  tls:
-  - match:
-    - port: 443
-      sniHosts:
-      - httpbin.org
-    route:
-    - destination:
-        host: httpbin.org
-        port:
-          number: 443
-        subset: httpbin
----
+        mode: SIMPLE # initiates HTTPS for connections to httpbin
 EOF
 ```
 
@@ -419,7 +390,7 @@ spec:
         credentialName: client-credential # this must match the secret created earlier to hold client certs
         sni: httpbin 
         # subjectAltNames: # can be enabled if the certificate was generated with SAN
-        # - httpbin
+        # - httpbin.org
 EOF
 ```
 
