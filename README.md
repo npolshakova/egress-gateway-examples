@@ -91,7 +91,7 @@ Note: This configuration example does not enable secure egress traffic control i
 
 ## Basic Egress Gateway Setup
 
-### HTTP (Egress, but insecure) and HTTPS (Egress, but secure)
+### HTTP (Egress, but insecure)
 
 1. Apply config
 
@@ -191,6 +191,96 @@ This shows up because when we installed Istio, we included this config to enable
  --set meshConfig.accessLogFile=/dev/stdout
 ```
 
+
+### HTTPS egress to httpbin
+
+1. Use the same setup as before with httpbin ServiceEntry, use the same Gateway as before, but a slightly different VirtualService and new DestinationRule resource:
+
+```yaml
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: istio-egressgateway
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - httpbin.org
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: direct-httpbin-through-egress-gateway
+spec:
+  hosts:
+  - httpbin.org
+  gateways:
+  - istio-egressgateway
+  - mesh
+  http:
+  - match:
+    - gateways:
+      - mesh
+      port: 80
+    route:
+    - destination:
+        host: istio-egressgateway.istio-system.svc.cluster.local
+        port:
+          number: 80
+      weight: 100
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 80
+    route:
+    - destination:
+        host: httpbin.org
+        port:
+          number: 443
+      weight: 100
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: originate-tls-for-httpbin
+spec:
+  host: httpbin.org
+  trafficPolicy:
+    portLevelSettings:
+    - port:
+        number: 443
+      tls:
+        mode: SIMPLE # initiates HTTPS for connections to httpbin
+EOF
+```
+
+2. Send the http request to httpbin
+
+```shell
+ kubectl exec curl -n curl -c curl -- curl -sSL -o /dev/null -D - http://httpbin.org/headers
+HTTP/1.1 200 OK
+date: Thu, 20 Jun 2024 22:14:31 GMT
+content-type: application/json
+content-length: 1620
+server: envoy
+access-control-allow-origin: *
+access-control-allow-credentials: true
+x-envoy-upstream-service-time: 225
+```
+
+3. Check the egresss gateway logs to make sure the request is going through the gateway. You will notice although we sent an HTTP request, we are using the `443` TLS port. The gateway is initializing an HTTPS request:
+
+```shell
+❯ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system -f
+[2024-06-20T22:14:31.153Z] "GET /headers HTTP/2" 200 - via_upstream - "-" 0 1620 222 222 "10.244.0.8" "curl/7.83.1-DEV" "983d9cb1-b668-4554-aca3-749ffc8f6b89" "httpbin.org" "44.195.248.108:443" outbound|443||httpbin.org 10.244.0.6:51144 10.244.0.6:8080 10.244.0.8:38550 - -
+```
+
 ### HTTPS throughout via PASSTHROUGH: Egress and secure
 
 This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
@@ -277,9 +367,9 @@ You should see `outbound|443` which indicates we are using the TLS port.
 [2024-06-20T21:39:23.441Z] "- - -" 0 - - - "-" 940 5946 217 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:56320 10.244.0.6:8443 10.244.0.8:35674 httpbin.org -
 ```
 
-### TLS origination at egress gateway
+### TLS origination at egress gateway, mutual TLS throughout
 
-# TODO: debug
+# TODO: debug??!?!
 
 1. Use the same httpbin ServiceEntry as before, but now let's get have the egress gateway do some TLS. In order to configure the TLS traffic policy, we'll need a new resource- a `DestinationRule. Apply the Gateway, VirtualService and two DestinationRule:
 
