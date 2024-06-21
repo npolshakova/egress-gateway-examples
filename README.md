@@ -305,7 +305,7 @@ spec:
 apiVersion: networking.istio.io/v1alpha3
 kind: DestinationRule
 metadata:
-  name: egressgateway-for-httpbin
+  name: mtls-to-gateway
 spec:
   host: istio-egressgateway.istio-system.svc.cluster.local
   trafficPolicy:
@@ -389,11 +389,11 @@ NAME                                   READY   STATUS    RESTARTS   AGE   IP    
 istio-egressgateway-75c5457c56-htpvz   1/1     Running   0          33m   10.244.0.6   kind-control-plane   <none>           <none>
 ```
 
-### HTTPS throughout via PASSTHROUGH: Egress and secure
+### HTTPS throughout via PASSTHROUGH at Gateway
 
 This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
 
-1. Use the same setup as before with httpbin ServiceEntry, but now let's use HTTPS in the Gateway:
+1. Modify the Gateway to use PASSTHROUGH instead of terminating the HTTPS connection from the sidecar. This also means we'll need to delete the DestinationRule so that the sidecar will not attempt an mTLS connection with the gateway. As such, we'll need to send an https request from the curl pod ourselves, which means the VirtualService will need a `tls` block instead of an `http` one:
 
 ```yaml
 kubectl apply -f - <<EOF
@@ -406,12 +406,12 @@ spec:
     istio: egressgateway
   servers:
   - port:
-      number: 443 # Now use the TLS port
-      name: tls 
-      protocol: TLS
+      number: 443
+      name: https
+      protocol: HTTPS
     hosts:
     - httpbin.org
-    tls: # Set the TLS mode here
+    tls:
       mode: PASSTHROUGH
 ---
 apiVersion: networking.istio.io/v1alpha3
@@ -424,12 +424,12 @@ spec:
   gateways:
   - mesh
   - istio-egressgateway
-  tls:
+  tls: # changed to tls
   - match:
     - gateways:
       - mesh
-      port: 443 # Use the TLS port here 
-      sniHosts: # Specify the SNI for validation and routing at the egress gateway
+      port: 443 # now the https port, since we'll send an https request
+      sniHosts: # specify the SNI for validation and routing at the egress gateway
       - httpbin.org
     route:
     - destination:
@@ -447,32 +447,49 @@ spec:
         host: httpbin.org
         port:
           number: 443
-      weight: 100
 EOF
+kubectl delete destinationrule mtls-to-gateway
 ```
 
 2. Send a request using https:
 
 ```shell
-❯ kubectl exec curl -n curl -c curl -- curl -sSL -o /dev/null -D - https://httpbin.org/headers
-HTTP/2 200
-date: Thu, 20 Jun 2024 21:39:23 GMT
-content-type: application/json
-content-length: 177
-server: gunicorn/19.9.0
-access-control-allow-origin: *
-access-control-allow-credentials: true
+kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
+```
+```
+curl: (35) error:1408F10B:SSL routines:ssl3_get_record:wrong version number
+command terminated with exit code 35
 ```
 
-3. Check the egress gateway logs to make sure we're going through the gateway:
+3. Uh oh, we got an SSL error! Why? Because we still have a DestinationRule that does TLS Origination at the gateway. This means our request is double-encrypted.
+Let's delete that DestinationRule:
 ```shell
-kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system -f
+kubectl delete destinationrule originate-tls-for-httpbin
 ```
 
-You should see `outbound|443` which indicates we are using the TLS port.
+4. Now let's try the https request again:
+```shell
+kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
+```
+
+```json
+{
+  "headers": {
+    "Accept": "*/*",
+    "Host": "httpbin.org",
+    "User-Agent": "curl/7.83.1-DEV",
+    "X-Amzn-Trace-Id": "Root=1-6675ef13-625b4c8e616be9c53ab44950"
+  }
+}
+```
+
+5. Encrypted requests will not add the headers, so we'll need to check the egress gateway logs to make sure we're going through the gateway:
+```shell
+kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
+```
 
 ```shell
-[2024-06-20T21:39:23.441Z] "- - -" 0 - - - "-" 940 5946 217 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:56320 10.244.0.6:8443 10.244.0.8:35674 httpbin.org -
+[2024-06-21T21:22:27.560Z] "- - -" 0 - - - "-" 940 5946 156 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:50356 10.244.0.6:8443 10.244.0.7:51628 httpbin.org -
 ```
 
 ### What about mTLS? 
