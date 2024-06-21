@@ -335,7 +335,7 @@ spec:
     - destination:
         host: istio-egressgateway.istio-system.svc.cluster.local
         port:
-          number: 443
+          number: 443 # new Gateway port
   - match:
     - gateways:
       - istio-egressgateway
@@ -344,7 +344,7 @@ spec:
     - destination:
         host: httpbin.org
         port:
-          number: 443
+          number: 443 # new Gateway port
 EOF
 ```
 
