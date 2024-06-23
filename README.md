@@ -1,4 +1,10 @@
-# Egress Gateway Examples
+# Speak Egress and Exit: A Look at Securing Traffic Out of the Mesh with Istio
+
+Though Istio can send traffic to an external IP address, hostname, or internal DNS entry directly, this doesn’t limit which services can access external endpoints. Egress gateways enforce policies across an organization and provide a centralized point for monitoring, controlling, and shaping outbound traffic. 
+
+Let's walk through some common egress scenarios! 
+
+<img src=meme.jpg>
 
 ## Background on Istio resources
 
@@ -43,6 +49,8 @@ kubectl apply -f simple-curl-pod.yaml
 ```
 
 ## ServiceEntry no Egress Gateway
+
+<img src=no-egress.png>
 
 Because we have Istio installed with `meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY` we can define a ServiceEntry and still have Istio traffic control (VirtualServices, etc.) and monitoring features. 
 
@@ -95,9 +103,13 @@ You could also use a DestinationRule to configure TLS origination at the sidecar
 
 Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
 
+<img src=no-egress-secure.png>
+
 ## Basic Egress Gateway Setup
 
 ### HTTP through Egress Gateway (still insecure)
+
+<img src=egress-not-secure.png>
 
 1. Create a Gateway resource using the istio-egressgateway Service's http2 port
 and a VirtualService which directs traffic to `httpbin.org:80` from within the mesh to route through the Gateway
@@ -193,6 +205,8 @@ This shows up because when we installed Istio, we included this config to enable
 
 ### HTTPS through Egress Gateway, with TLS Origination at the Gateway
 
+<img src=egress-tls-origination.png>
+
 1. Modify the VirtualService to send requests to httpbin.org on the HTTPS port and
 add a DestinationRule to originate the HTTPS request:
 
@@ -276,6 +290,8 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 ```
 
 ### HTTPS through Egress Gateway, with TLS Origination at the Gateway and mTLS Between the Sidecar and the Gateway
+
+<img src=mtls-egress-tls-origination.png>
 
 Now let's ensure the requests use mTLS within our mesh.
 
@@ -391,6 +407,8 @@ istio-egressgateway-75c5457c56-htpvz   1/1     Running   0          33m   10.244
 
 ### HTTPS throughout via PASSTHROUGH at Gateway
 
+<img src=passthrough-egress.png>
+
 This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
 
 1. Modify the Gateway to use PASSTHROUGH instead of terminating the HTTPS connection from the sidecar. This also means we'll need to delete the DestinationRule so that the sidecar will not attempt an mTLS connection with the gateway. As such, we'll need to send an https request from the curl pod ourselves, which means the VirtualService will need a `tls` block instead of an `http` one:
@@ -494,7 +512,12 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 
 ### What about mTLS? 
 
-DestinationRule can be configured to also perform mTLS orgination.
+<img src=mtls-egress.png>
+
+DestinationRule can be configured to also perform mTLS orgination. In order to set this up, you will need:
+- Generate client and server certificates
+- Deploy an external service that supports the mutual TLS protocol
+- Redeploy the egress gateway with the needed mutual TLS certs
 
 ```yaml
 kubectl apply -n istio-system -f - <<EOF
@@ -503,7 +526,7 @@ kind: DestinationRule
 metadata:
   name: originate-mtls-for-httpbin
 spec:
-  host: httpbin
+  host: httpbin.org
   trafficPolicy:
     loadBalancer:
       simple: ROUND_ROBIN
@@ -518,6 +541,18 @@ spec:
         # - httpbin.org
 EOF
 ```
+
+### What about ExternalName Kubernetes Services? 
+
+<img src=externallname-svc.png>
+
+The Kubernetes Service supports `ExternalName`` service types which let you create a local DNS alias to an external service. 
+
+You will need to configure the TLS mode to not be Istio’s mutual TLS. The external services are not part of an Istio service mesh so they cannot use Istio mTLS.You can still perform TLS origination with Istio DestinationRules or you can disable Istio's mTLS if the workload already uses TLS.
+
+A VirtualService can be used to route traffic through the egress gateway as before. 
+
+<img src=externallname-egress.png>
 
 ### Additional notes with egress gateways 
 
