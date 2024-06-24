@@ -8,6 +8,6 @@ istioctl install --set profile=minimal \
  --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY \
  --set meshConfig.accessLogFile=/dev/stdout
 
- kubectl apply -f example-apps.yaml
+kubectl label namespace default istio-injection=enabled
 
- 
+kubectl apply -f simple-curl-pod.yaml
