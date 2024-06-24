@@ -510,7 +510,90 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 [2024-06-21T21:22:27.560Z] "- - -" 0 - - - "-" 940 5946 156 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:50356 10.244.0.6:8443 10.244.0.7:51628 httpbin.org -
 ```
 
-### What about mTLS? 
+### HTTP through Egress Gateway, with mTLS Between the Sidecar and the Gateway
+
+Let's say we currently have a setup that supports [HTTPS through Egress Gateway, with TLS Origination at the Gateway and mTLS Between the Sidecar and the Gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway-and-mtls-between-the-sidecar-and-the-gateway)
+
+It could be that our external service only supports HTTP requests, but we still want the request to be secured with mTLS within our mesh.
+
+1. Let's modify the VirtualService to again send requests to httpbin.org on the HTTP port. Then all we have to do is delete the
+DestinationRule that originates the HTTPS request:
+
+```yaml
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: direct-httpbin-through-egress-gateway
+spec:
+  hosts:
+  - httpbin.org
+  gateways:
+  - istio-egressgateway
+  - mesh
+  http:
+  - match:
+    - gateways:
+      - mesh
+      port: 80
+    route:
+    - destination:
+        host: istio-egressgateway.istio-system.svc.cluster.local
+        port:
+          number: 443
+  - match:
+    - gateways:
+      - istio-egressgateway
+      port: 443
+    route:
+    - destination:
+        host: httpbin.org
+        port:
+          number: 80 # back to HTTP port
+EOF
+kubectl delete destinationrule originate-tls-for-httpbin
+```
+
+In essence, we have undone the changes made in the [step to add TLS origination at the gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway).
+
+2. Send the http request as usual
+
+```shell
+kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
+```
+```json
+{
+  "headers": {
+    "Accept": "*/*",
+    "Host": "httpbin.org",
+    "User-Agent": "curl/7.83.1-DEV",
+    "X-Amzn-Trace-Id": "Root=1-6679e51f-31ee47906ad67ef039afb7bf",
+    "X-B3-Parentspanid": "c68e5a144b4f0193",
+    "X-B3-Sampled": "0",
+    "X-B3-Spanid": "deb64d4724fb2ba7",
+    "X-B3-Traceid": "bc38aa25bd4d029cc68e5a144b4f0193",
+    "X-Envoy-Attempt-Count": "1",
+    "X-Envoy-Decorator-Operation": "httpbin.org:80/*",
+    "X-Envoy-Internal": "true",
+    "X-Envoy-Peer-Metadata": "ChoKCkNMVVNURVJfSUQSDBoKS3ViZXJuZXRlcwocCgxJTlNUQU5DRV9JUFMSDBoKMTAuMjQ0LjAuNgoZCg1JU1RJT19WRVJTSU9OEggaBjEuMTkuMwqYAwoGTEFCRUxTEo0DKooDChwKA2FwcBIVGhNpc3Rpby1lZ3Jlc3NnYXRld2F5ChMKBWNoYXJ0EgoaCGdhdGV3YXlzChQKCGhlcml0YWdlEggaBlRpbGxlcgo2CilpbnN0YWxsLm9wZXJhdG9yLmlzdGlvLmlvL293bmluZy1yZXNvdXJjZRIJGgd1bmtub3duChgKBWlzdGlvEg8aDWVncmVzc2dhdGV3YXkKGQoMaXN0aW8uaW8vcmV2EgkaB2RlZmF1bHQKLwobb3BlcmF0b3IuaXN0aW8uaW8vY29tcG9uZW50EhAaDkVncmVzc0dhdGV3YXlzChIKB3JlbGVhc2USBxoFaXN0aW8KOAofc2VydmljZS5pc3Rpby5pby9jYW5vbmljYWwtbmFtZRIVGhNpc3Rpby1lZ3Jlc3NnYXRld2F5Ci8KI3NlcnZpY2UuaXN0aW8uaW8vY2Fub25pY2FsLXJldmlzaW9uEggaBmxhdGVzdAoiChdzaWRlY2FyLmlzdGlvLmlvL2luamVjdBIHGgVmYWxzZQoaCgdNRVNIX0lEEg8aDWNsdXN0ZXIubG9jYWwKLgoETkFNRRImGiRpc3Rpby1lZ3Jlc3NnYXRld2F5LTY2NDZmODc5YjgtZGZ4N3YKGwoJTkFNRVNQQUNFEg4aDGlzdGlvLXN5c3RlbQpcCgVPV05FUhJTGlFrdWJlcm5ldGVzOi8vYXBpcy9hcHBzL3YxL25hbWVzcGFjZXMvaXN0aW8tc3lzdGVtL2RlcGxveW1lbnRzL2lzdGlvLWVncmVzc2dhdGV3YXkKJgoNV09SS0xPQURfTkFNRRIVGhNpc3Rpby1lZ3Jlc3NnYXRld2F5",
+    "X-Envoy-Peer-Metadata-Id": "router~10.244.0.6~istio-egressgateway-6646f879b8-dfx7v.istio-system~istio-system.svc.cluster.local",
+    "X-Forwarded-Client-Cert": "By=spiffe://cluster.local/ns/istio-system/sa/istio-egressgateway-service-account;Hash=c207a3ae62f457284f557a63adad6f393852824c2875df3716e7da01af08ea0d;Cert=\"-----BEGIN%20CERTIFICATE-----%0AMIIDQDCCAiigAwIBAgIQYGgrZz9HXZUDAuGQrjfutTANBgkqhkiG9w0BAQsFADAY%0AMRYwFAYDVQQKEw1jbHVzdGVyLmxvY2FsMB4XDTI0MDYyNDIwMTA1M1oXDTI0MDYy%0ANTIwMTI1M1owADCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAOuREo8N%0Ape0SCJ0qSjzIo%2BeT1%2F8vRcDAfw%2FxrhtUzdxON2uK%2FTgVH3KmFIjozexvrhmiBZTJ%0AY4sSfo6YAsjQUveFQNf14ww%2BX4Un9OOgp1BVmOmSyQhqOuB%2FaMxkVeCHMb7RdSUm%0A8MTG1pYhub02tMIt3HCNmxTO9YqFPd9w3rSfTvUMVZvzog4wn7zNDa9GCQjgY3Ac%0AC1zsyXv5ajxOY4%2B6VKnsdwLIG09td%2B1lFFeEUIkv3U4rNAljA%2BXLUgx7uB8zSNVm%0AHfdq6A2ByyGAml%2BX2rKPdg6uUlaNjAZlggRuctm%2BAnD8e3WurI8bZR4s58eGrKCW%0AMKu1RI7FyWJ87MkCAwEAAaOBnTCBmjAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYw%0AFAYIKwYBBQUHAwEGCCsGAQUFBwMCMAwGA1UdEwEB%2FwQCMAAwHwYDVR0jBBgwFoAU%0A7HNYUItjVIQYFHfoVzZXJeAb98EwOgYDVR0RAQH%2FBDAwLoYsc3BpZmZlOi8vY2x1%0Ac3Rlci5sb2NhbC9ucy9kZWZhdWx0L3NhL2RlZmF1bHQwDQYJKoZIhvcNAQELBQAD%0AggEBAGBEO2IZCi96on5%2F%2FQ8bf7Ph5J%2BLyi3sLZPd%2Fhf2yGVJjoyeZ4Cpvd0uRFK6%0ASqPX%2Bq7ZQVK%2FWWsYXwXlZFstMYJUX4dRTB20afvLkaVFZY%2FaZ6bkhCbeDvqUBhZm%0A9cvqpuQbyplE7vDmJq2AIGTgdzqJ1GhUChnk5G1EbjgesVW7Dxw%2FAyMSoB8dtOhf%0AvYgJYyNM9eTAAHBP86Y0kdhQVxqHD3v9z1aPQImkz0te93iq3klSMWn8wIPkvyR2%0AYBfU5Mo5RklNO8weycygG%2FClkK9nMdpFXUEyOszSckhAKbDwH5K5P29S5REeW7jE%0AGCWbEjt9TxDJcpiDheFXFP%2BeJSI%3D%0A-----END%20CERTIFICATE-----%0A\";Subject=\"\";URI=spiffe://cluster.local/ns/default/sa/default"
+  }
+}
+```
+
+The `X-Forwarded-Client-Cert` header still shows that the sidecar to egress gateway connection is secured with mTLS, but the `X-Envoy-Decorator-Operation` header is back to showing that our request was sent to httpbin.org's HTTP port.
+
+3. You can examine the changes in the egress gateway logs as well.
+
+```shell
+kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
+```
+```
+[2024-06-24T21:29:03.272Z] "GET /headers HTTP/1.1" 200 - via_upstream - "-" 0 3157 67 67 "10.244.0.7" "curl/7.83.1-DEV" "a925dde7-a7ac-4e1b-b33d-0b5c4403b791" "httpbin.org" "44.195.190.188:80" outbound|80||httpbin.org 10.244.0.6:56744 10.244.0.6:8443 10.244.0.7:57726 httpbin.org -
+```
+
+### What About mTLS to the External Service?
 
 <img src=mtls-egress.png>
 
@@ -518,6 +601,10 @@ A DestinationRule can be configured to also perform mTLS orgination. In order to
 - Generate client and server certificates
 - Deploy an external service that supports the mutual TLS protocol
 - Redeploy the egress gateway with the needed mutual TLS certs
+
+See the [Istio docs](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway-tls-origination/#perform-mutual-tls-origination-with-an-egress-gateway) for instructions on how to get this running.
+
+The DestinationRule that will perform mTLS origination will look like this: 
 
 ```yaml
 kubectl apply -n istio-system -f - <<EOF
@@ -535,8 +622,8 @@ spec:
         number: 443
       tls:
         mode: MUTUAL
-        credentialName: client-credential # this must match the secret created earlier to hold client certs
-        sni: httpbin 
+        credentialName: client-credential # this must match the secret created to hold client certs
+        sni: httpbin.org
         # subjectAltNames: # can be enabled if the certificate was generated with SAN
         # - httpbin.org
 EOF
@@ -554,13 +641,19 @@ A VirtualService can be used to route traffic through the egress gateway as befo
 
 <img src=externalname-egress.png>
 
+### Unsupported Configurations
+
+It's worth noting that not all possible configurations are supported by Istio.
+
+For example, Istio does not support TLS termination at the sidecar (https://github.com/istio/istio/issues/37160). Without terminating the HTTPS connection, attempting mTLS between the sidecar and the egress gateway would result in double encryption. Therefore, an HTTPS request from the client app itself (not its sidecar) which enforces mTLS within the mesh is not supported.
+
 ### Additional notes with egress gateways 
 
-Just defining an egress Gateway in Istio doesn't provides any special treatment for the nodes on which the egress gateway service runs. The cluster administrator/cloud provider needs to deploy the egress gateways on dedicated nodes and add additional security measures to make these nodes more secure than the rest of the mesh.
+Just defining an egress Gateway in Istio doesn't provide any special treatment for the nodes on which the egress gateway service runs. The cluster administrator/cloud provider needs to deploy the egress gateways on dedicated nodes and add additional security measures to make these nodes more secure than the rest of the mesh.
 
-Istio _cannot_ securely enforce that all egress traffic actually flows through the egress gateways. So additional rules must be put in place to ensure no traffic leaves the mesh bypassing the egress gateway. This can be done:
-- Firewall to deny all traffic not coming from the egress gateway
-- Kubernetes network policies can also forbid all the egress traffic not originating from the egress gateway
-- Configure network to ensure application nodes can only access the Internet via a gateway by preventing allocating public IPs to pods other than gateways and configure NAT devices to drop packets not originating at the egress gateways.
+Istio _cannot_ securely enforce that all egress traffic actually flows through the egress gateways. So additional rules must be put in place to ensure no traffic leaves the mesh bypassing the egress gateway. This can be done with:
+- a Firewall to deny all traffic not coming from the egress gateway
+- Kubernetes network policies to forbid all the egress traffic not originating from the egress gateway
+- network configuration to ensure application nodes can only access the Internet via a gateway by preventing allocating public IPs to pods other than gateways and configuring NAT devices to drop packets not originating at the egress gateways
 
-See https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway/#additional-security-considerations 
+See the [Istio docs](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway/#additional-security-considerations) for more details and an example using a Kubernetes network policy.
