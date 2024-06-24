@@ -514,7 +514,7 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 
 <img src=mtls-egress.png>
 
-DestinationRule can be configured to also perform mTLS orgination. In order to set this up, you will need:
+A DestinationRule can be configured to also perform mTLS orgination. In order to set this up, you will need to:
 - Generate client and server certificates
 - Deploy an external service that supports the mutual TLS protocol
 - Redeploy the egress gateway with the needed mutual TLS certs
@@ -544,15 +544,15 @@ EOF
 
 ### What about ExternalName Kubernetes Services? 
 
-<img src=externallname-svc.png>
+<img src=externalname-svc.png>
 
-The Kubernetes Service supports `ExternalName`` service types which let you create a local DNS alias to an external service. 
+The Kubernetes Service supports `ExternalName` service types which let you create a local DNS alias to an external service. 
 
-You will need to configure the TLS mode to not be Istio’s mutual TLS. The external services are not part of an Istio service mesh so they cannot use Istio mTLS.You can still perform TLS origination with Istio DestinationRules or you can disable Istio's mTLS if the workload already uses TLS.
+You will need to configure the TLS mode to not be Istio’s mutual TLS. The external services are not part of an Istio service mesh so they cannot use Istio mTLS. You can still perform TLS origination with Istio DestinationRules or you can disable Istio's mTLS if the workload already uses TLS.
 
 A VirtualService can be used to route traffic through the egress gateway as before. 
 
-<img src=externallname-egress.png>
+<img src=externalname-egress.png>
 
 ### Additional notes with egress gateways 
 
