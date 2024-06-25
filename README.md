@@ -635,11 +635,34 @@ EOF
 
 The Kubernetes Service supports `ExternalName` service types which let you create a local DNS alias to an external service. 
 
+Note: You'll need to reinstall Istio from the previous example with `--set "meshConfig.outboundTrafficPolicy.mode=ALLOW_ANY"` to allow the ExternalName to work. 
+
+```
+kubectl apply -f - <<EOF
+kind: Service
+apiVersion: v1
+metadata:
+  name: external-name-httpbin
+spec:
+  type: ExternalName
+  externalName: httpbin.org
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+  - name: https-port
+    port: 443
+    protocol: TCP
+EOF
+```
+
+Then curl 
+```
+kubectl exec curl -c curl -- curl -sS http://external-name-httpbin.default/headers
+```
+
 You will need to configure the TLS mode to not be Istio’s mutual TLS. The external services are not part of an Istio service mesh so they cannot use Istio mTLS. You can still perform TLS origination with Istio DestinationRules or you can disable Istio's mTLS if the workload already uses TLS.
 
-A VirtualService can be used to route traffic through the egress gateway as before. 
-
-<img src=externalname-egress.png>
 
 ### Unsupported Configurations
 
