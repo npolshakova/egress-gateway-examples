@@ -510,7 +510,9 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 [2024-06-21T21:22:27.560Z] "- - -" 0 - - - "-" 940 5946 156 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:50356 10.244.0.6:8443 10.244.0.7:51628 httpbin.org -
 ```
 
-### HTTP through Egress Gateway, with mTLS Between the Sidecar and the Gateway
+### Passthrough Egress Gateway, with TLS Origination at Sidecar
+
+<img src="egress-passthrough-tls-origination.png">
 
 Let's say we currently have a setup that supports [HTTPS through Egress Gateway, with TLS Origination at the Gateway and mTLS Between the Sidecar and the Gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway-and-mtls-between-the-sidecar-and-the-gateway)
 
