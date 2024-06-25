@@ -522,53 +522,19 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 
 From the logs we see we are going through the egress gateway to `httpbin.org` on port 443, but not terminated since the log has `"- - -"` instead of the usual response code details (see `"GET /headers HTTP/2" 200` in the previous examples). 
 
-### Passthrough Egress Gateway, with TLS Origination at Sidecar
+### Switching from mTLS in Mesh to HTTP via the Egress Gateway
 
-<img src="egress-passthrough-tls-origination.png">
+<img src="mtls-egress-switch-to-http.png">
 
-Let's say we currently have a setup that supports [HTTPS through Egress Gateway, with TLS Origination at the Gateway and mTLS Between the Sidecar and the Gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway-and-mtls-between-the-sidecar-and-the-gateway)
+It could be that our external service only supports HTTP requests, but we still want the request to be secured with mTLS within our mesh. We can configure the VirtualService such that requests leaving the egress gateway use httpbin.org's HTTP port, but still have mTLS within the mesh.
 
-It could be that our external service only supports HTTP requests, but we still want the request to be secured with mTLS within our mesh.
+Note: For this example, if you are continuing from a previous step make sure to delete all the Istio config you have applied. 
 
-1. Let's modify the VirtualService to again send requests to httpbin.org on the HTTP port. Then all we have to do is delete the
-DestinationRule that originates the HTTPS request:
+1. We will need a VirtualService to handle the routing and a DestinationRule to configure the request to use mTLS within the mesh:
 
 ```yaml
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  name: direct-httpbin-through-egress-gateway
-spec:
-  hosts:
-  - httpbin.org
-  gateways:
-  - istio-egressgateway
-  - mesh
-  http:
-  - match:
-    - gateways:
-      - mesh
-      port: 80
-    route:
-    - destination:
-        host: istio-egressgateway.istio-system.svc.cluster.local
-        port:
-          number: 443
-  - match:
-    - gateways:
-      - istio-egressgateway
-      port: 443
-    route:
-    - destination:
-        host: httpbin.org
-        port:
-          number: 80 # back to HTTP port
-EOF
-kubectl delete destinationrule originate-tls-for-httpbin
+kubectl apply -f mtls-egress-switch-to-http.yaml
 ```
-
-In essence, we have undone the changes made in the [step to add TLS origination at the gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway).
 
 2. Send the http request as usual
 
