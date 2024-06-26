@@ -110,9 +110,9 @@ The `X-Envoy-Peer-Metadata-Id` is the Istio HTTP metadata exchange header. These
 
 You could also use a DestinationRule to configure TLS origination at the sidecar.
 
-Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
-
 <img src=no-egress-gw-secure.png>
+
+Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
 
 ## Basic Egress Gateway Setup
 
