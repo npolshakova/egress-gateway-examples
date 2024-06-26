@@ -419,7 +419,7 @@ istio-egressgateway-75c5457c56-htpvz   1/1     Running   0          33m   10.244
 
 <img src=passthrough-egress.png>
 
-This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS. Traffic leaving via the egress gateway will perform SNI passthrough instead of TLS terminatation for requests. 
+This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS. Traffic leaving via the egress gateway will perform SNI passthrough instead of TLS termination for requests. 
 
 1. Modify the Gateway to use `PASSTHROUGH` instead of terminating the HTTPS connection from the sidecar. This change also means we'll need to delete the DestinationRule so that the sidecar will not attempt an mTLS connection with the gateway. As such, we'll need to send an HTTPS request from the curl pod ourselves, which means the VirtualService will need a `tls` block instead of an `http` one:
 
