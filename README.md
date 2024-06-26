@@ -1,6 +1,6 @@
 # Speak Egress and Exit: A Look at Securing Traffic Out of the Mesh with Istio
 
-Though Istio can send traffic to an external IP address, hostname, or internal DNS entry directly, this doesn’t limit which services can access external endpoints. Egress gateways enforce policies across an organization and provide a centralized point for monitoring, controlling, and shaping outbound traffic. 
+Although Istio can send traffic to an external IP address, hostname, or internal DNS entry directly, this doesn’t limit which services can access external endpoints. Egress gateways enforce policies across an organization and provide a centralized point for monitoring, controlling, and shaping outbound traffic.
 
 Let's walk through some common egress scenarios! 
 
@@ -50,7 +50,7 @@ kubectl apply -f simple-curl-pod.yaml
 
 ## ServiceEntry no Egress Gateway
 
-<img src=no-egress.png>
+<img src=no-egress-gw.png>
 
 Because we have Istio installed with `meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY` we can define a ServiceEntry and still have Istio traffic control (VirtualServices, etc.) and monitoring features. 
 
@@ -76,7 +76,7 @@ spec:
 EOF
 ```
 
-2. Send an HTTP request with just the ServiceEntry
+2. Send an HTTP request to `httpbin.org`
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -99,20 +99,31 @@ And see the `X-Envoy-Peer-Metadata-Id` is set to the envoy sidecar id:
 }
 ```
 
+The `X-Envoy-Peer-Metadata-Id` is the Istio HTTP metadata exchange header. These headers will be used for demo purposes, but Istio can be configured to strip the `x-envoy-metadata` headers for requests to services outside the mesh. You can configure this in the meshConfig by installing Istio with:
+```
+  meshConfig:
+    defaultConfig:
+      proxyHeaders:
+        metadataExchangeHeaders:
+          mode: IN_MESH # append istio-meta headers for in-mesh sidecar-to-sidecar requests only
+```
+
 You could also use a DestinationRule to configure TLS origination at the sidecar.
 
 Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
 
-<img src=no-egress-secure.png>
+<img src=no-egress-gw-secure.png>
 
 ## Basic Egress Gateway Setup
 
-### HTTP through Egress Gateway (still insecure)
+The following examples will all use Istio's egress gateway instead of directly sending traffic out of the mesh as in the previous example. 
 
-<img src=egress-not-secure.png>
+### Basic HTTP through Egress Gateway
+
+<img src=egress-gw-not-secure.png>
 
 1. Create a Gateway resource using the istio-egressgateway Service's http2 port
-and a VirtualService which directs traffic to `httpbin.org:80` from within the mesh to route through the Gateway
+and a VirtualService which directs traffic to `httpbin.org:80` from within the mesh to route through the Gateway:
 
 ```yaml
 kubectl apply -f - <<EOF
@@ -163,7 +174,7 @@ spec:
 EOF
 ```
 
-2. Send an http request as before:
+2. Send an HTTP request as before:
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -202,12 +213,11 @@ This shows up because when we installed Istio, we included this config to enable
  --set meshConfig.accessLogFile=/dev/stdout
 ```
 
-
 ### HTTPS through Egress Gateway, with TLS Origination at the Gateway
 
 <img src=egress-tls-origination.png>
 
-1. Modify the VirtualService to send requests to httpbin.org on the HTTPS port and
+1. Modify the VirtualService to send requests to httpbin.org on the HTTPS port (443) and
 add a DestinationRule to originate the HTTPS request:
 
 ```yaml
@@ -257,7 +267,7 @@ spec:
 EOF
 ```
 
-2. Send the http request to httpbin
+2. Send the HTTP request to httpbin.org:
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -278,7 +288,7 @@ kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
 }
 ```
 
-Notice that although we sent an HTTP request, now the `X-Envoy-Decorator-Operation` has httpbin.org's HTTPS port 443; the gateway is initializing an HTTPS request.
+Notice that although we sent an HTTP request on port 80, now the `X-Envoy-Decorator-Operation` has httpbin.org's HTTPS port 443; the gateway is initializing an HTTPS request.
 
 3. The egress gateway logs will confirm the same thing, showing `outbound|443||httpbin.org`.
 ```shell
@@ -295,7 +305,7 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 
 Now let's ensure the requests use mTLS within our mesh.
 
-1. Let's modify our Gateway to use the istio-egressgateway Service's https port and to expect mTLS connections from the sidecar.
+1. Let's modify our Gateway to use the istio-egressgateway Service's HTTPS port and to expect mTLS connections from the sidecar.
 We'll also need to add a new DestinationRule such that the sidecar's requests sent to the Gateway use mTLS.
 Lastly, we'll modify the VirtualService to use the new Gateway port:
 
@@ -307,14 +317,14 @@ metadata:
   name: istio-egressgateway
 spec:
   selector:
-    istio: egressgateway
+    istio: egressgateway # selector for the egress gateway pod
   servers:
   - port:
       number: 443
       name: https
       protocol: HTTPS
     hosts:
-    - httpbin.org
+    - httpbin.org # host for which this Gateway applies
     tls:
       mode: ISTIO_MUTUAL
 ---
@@ -355,16 +365,16 @@ spec:
   - match:
     - gateways:
       - istio-egressgateway
-      port: 443
+      port: 443 # new Gateway port
     route:
     - destination:
         host: httpbin.org
         port:
-          number: 443 # new Gateway port
+          number: 443
 EOF
 ```
 
-2. Send the http request as usual
+2. Send the HTTP request as before
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -386,9 +396,9 @@ kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
 }
 ```
 
-Notice now an `X-Forwarded-Client-Cert` header appears because the sidecar to egress gateway connection is secured with mTLS.
+Notice now an `X-Forwarded-Client-Cert` header appears because the sidecar to egress gateway connection is secured with mTLS. The `X-Forwarded-Client-Cert` header is an Envoy header that indicates certificate information for the clients that a request has flowed through. Istio leverages the [`X-Forwarded-Client-Cert`](https://istio.io/latest/docs/ops/configuration/traffic-management/network-topologies/#forwarding-external-client-attributes-ip-address-certificate-info-to-destination-workloads) header to identify encrypted traffic. 
 
-3. You can examine the egress gateway logs as usual. The request is now going to the egress gateway's IP on its https targetPort 8443.
+3. You can examine the egress gateway logs as before. The request is now going to the egress gateway's IP on its HTTPS targetPort 8443.
 
 ```shell
 kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
@@ -409,9 +419,9 @@ istio-egressgateway-75c5457c56-htpvz   1/1     Running   0          33m   10.244
 
 <img src=passthrough-egress.png>
 
-This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS.
+This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS. Traffic leaving via the egress gateway will perform SNI passthrough instead of TLS termination for requests. 
 
-1. Modify the Gateway to use PASSTHROUGH instead of terminating the HTTPS connection from the sidecar. This also means we'll need to delete the DestinationRule so that the sidecar will not attempt an mTLS connection with the gateway. As such, we'll need to send an https request from the curl pod ourselves, which means the VirtualService will need a `tls` block instead of an `http` one:
+1. Modify the Gateway to use `PASSTHROUGH` instead of terminating the HTTPS connection from the sidecar. This change also means we'll need to delete the DestinationRule so that the sidecar will not attempt an mTLS connection with the gateway. As such, we'll need to send an HTTPS request from the curl pod ourselves, which means the VirtualService will need a `tls` block instead of an `http` one:
 
 ```yaml
 kubectl apply -f - <<EOF
@@ -446,7 +456,7 @@ spec:
   - match:
     - gateways:
       - mesh
-      port: 443 # now the https port, since we'll send an https request
+      port: 443 # now the HTTPS port, since we'll send an HTTPS request
       sniHosts: # specify the SNI for validation and routing at the egress gateway
       - httpbin.org
     route:
@@ -469,7 +479,7 @@ EOF
 kubectl delete destinationrule mtls-to-gateway
 ```
 
-2. Send a request using https:
+2. Send a request using HTTPS:
 
 ```shell
 kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
@@ -485,7 +495,7 @@ Let's delete that DestinationRule:
 kubectl delete destinationrule originate-tls-for-httpbin
 ```
 
-4. Now let's try the https request again:
+4. Now let's try the HTTPS request again:
 ```shell
 kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
 ```
@@ -501,7 +511,7 @@ kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
 }
 ```
 
-5. Encrypted requests will not add the headers, so we'll need to check the egress gateway logs to make sure we're going through the gateway:
+5. Encrypted requests will not add the envoy metadata headers, so we'll need to check the egress gateway logs to make sure we're going through the gateway:
 ```shell
 kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 ```
@@ -510,55 +520,23 @@ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
 [2024-06-21T21:22:27.560Z] "- - -" 0 - - - "-" 940 5946 156 - "-" "-" "-" "-" "18.211.234.122:443" outbound|443||httpbin.org 10.244.0.6:50356 10.244.0.6:8443 10.244.0.7:51628 httpbin.org -
 ```
 
-### Passthrough Egress Gateway, with TLS Origination at Sidecar
+From the logs we see we are going through the egress gateway to `httpbin.org` on port 443, but not terminated since the log has `"- - -"` instead of the usual response code details (see `"GET /headers HTTP/2" 200` in the previous examples). 
 
-<img src="egress-passthrough-tls-origination.png">
+### Switching from mTLS in Mesh to HTTP via the Egress Gateway
 
-Let's say we currently have a setup that supports [HTTPS through Egress Gateway, with TLS Origination at the Gateway and mTLS Between the Sidecar and the Gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway-and-mtls-between-the-sidecar-and-the-gateway)
+<img src="mtls-egress-switch-to-http.png">
 
-It could be that our external service only supports HTTP requests, but we still want the request to be secured with mTLS within our mesh.
+It could be that our external service only supports HTTP requests, but we still want the request to be secured with mTLS within our mesh. We can configure the VirtualService such that requests leaving the egress gateway use httpbin.org's HTTP port, but still have mTLS within the mesh.
 
-1. Let's modify the VirtualService to again send requests to httpbin.org on the HTTP port. Then all we have to do is delete the
-DestinationRule that originates the HTTPS request:
+Note: For this example, if you are continuing from a previous step make sure to delete all the Istio config you have applied. 
+
+1. We will need a VirtualService to handle the routing and a DestinationRule to configure the request to use mTLS within the mesh:
 
 ```yaml
-kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  name: direct-httpbin-through-egress-gateway
-spec:
-  hosts:
-  - httpbin.org
-  gateways:
-  - istio-egressgateway
-  - mesh
-  http:
-  - match:
-    - gateways:
-      - mesh
-      port: 80
-    route:
-    - destination:
-        host: istio-egressgateway.istio-system.svc.cluster.local
-        port:
-          number: 443
-  - match:
-    - gateways:
-      - istio-egressgateway
-      port: 443
-    route:
-    - destination:
-        host: httpbin.org
-        port:
-          number: 80 # back to HTTP port
-EOF
-kubectl delete destinationrule originate-tls-for-httpbin
+kubectl apply -f mtls-egress-switch-to-http.yaml
 ```
 
-In essence, we have undone the changes made in the [step to add TLS origination at the gateway](https://github.com/npolshakova/egress-gateway-examples?tab=readme-ov-file#https-through-egress-gateway-with-tls-origination-at-the-gateway).
-
-2. Send the http request as usual
+2. Send the HTTP request as before
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -604,8 +582,6 @@ A DestinationRule can be configured to also perform mTLS orgination. In order to
 - Deploy an external service that supports the mutual TLS protocol
 - Redeploy the egress gateway with the needed mutual TLS certs
 
-See the [Istio docs](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway-tls-origination/#perform-mutual-tls-origination-with-an-egress-gateway) for instructions on how to get this running.
-
 The DestinationRule that will perform mTLS origination will look like this: 
 
 ```yaml
@@ -630,6 +606,8 @@ spec:
         # - httpbin.org
 EOF
 ```
+
+See the [Istio docs](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway-tls-origination/#perform-mutual-tls-origination-with-an-egress-gateway) for more detailed instructions on how to get this running.
 
 ### What about ExternalName Kubernetes Services? 
 
@@ -679,6 +657,6 @@ Just defining an egress Gateway in Istio doesn't provide any special treatment f
 Istio _cannot_ securely enforce that all egress traffic actually flows through the egress gateways. So additional rules must be put in place to ensure no traffic leaves the mesh bypassing the egress gateway. This can be done with:
 - a Firewall to deny all traffic not coming from the egress gateway
 - Kubernetes network policies to forbid all the egress traffic not originating from the egress gateway
-- network configuration to ensure application nodes can only access the Internet via a gateway by preventing allocating public IPs to pods other than gateways and configuring NAT devices to drop packets not originating at the egress gateways
+- network configuration to ensure application nodes can only access the Internet via an egress gateway by preventing allocating public IPs to pods other than the gateways and configuring NAT devices to drop packets not originating at the gateways
 
 See the [Istio docs](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway/#additional-security-considerations) for more details and an example using a Kubernetes network policy.
