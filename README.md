@@ -99,7 +99,7 @@ And see the `X-Envoy-Peer-Metadata-Id` is set to the envoy sidecar id:
 }
 ```
 
-The `X-Envoy-Peer-Metadata-Id` is the Istio HTTP metadata exchange header. These headers will be used for demo purposes, but Istio can be configured to strip the `x-envoy-metadata` headers for requests to service outside the mesh. You can disable this by configuring the meshConfig when installing Istio with:
+The `X-Envoy-Peer-Metadata-Id` is the Istio HTTP metadata exchange header. These headers will be used for demo purposes, but Istio can be configured to strip the `x-envoy-metadata` headers for requests to services outside the mesh. You can configure this in the meshConfig by installing Istio with:
 ```
   meshConfig:
     defaultConfig:
