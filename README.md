@@ -50,7 +50,7 @@ kubectl apply -f simple-curl-pod.yaml
 
 ## ServiceEntry no Egress Gateway
 
-<img src=no-egress.png>
+<img src=no-egress-gw.png>
 
 Because we have Istio installed with `meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY` we can define a ServiceEntry and still have Istio traffic control (VirtualServices, etc.) and monitoring features. 
 
@@ -112,7 +112,7 @@ You could also use a DestinationRule to configure TLS origination at the sidecar
 
 Note: This configuration example does not enable secure egress traffic control in Istio. A malicious application can bypass the Istio sidecar proxy and access any external service without Istio control. To implement egress traffic control in a more secure way, you must direct egress traffic through an egress gateway...
 
-<img src=no-egress-secure.png>
+<img src=no-egress-gw-secure.png>
 
 ## Basic Egress Gateway Setup
 
@@ -120,7 +120,7 @@ The following examples will all use Istio's egress gateway instead of directly s
 
 ### Basic HTTP through Egress Gateway
 
-<img src=egress-not-secure.png>
+<img src=egress-gw-not-secure.png>
 
 1. Create a Gateway resource using the istio-egressgateway Service's http2 port
 and a VirtualService which directs traffic to `httpbin.org:80` from within the mesh to route through the Gateway:
@@ -374,7 +374,7 @@ spec:
 EOF
 ```
 
-2. Send the HTTP request as usual
+2. Send the HTTP request as before
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -536,7 +536,7 @@ Note: For this example, if you are continuing from a previous step make sure to 
 kubectl apply -f mtls-egress-switch-to-http.yaml
 ```
 
-2. Send the http request as usual
+2. Send the http request as before
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
