@@ -99,7 +99,7 @@ And see the `X-Envoy-Peer-Metadata-Id` is set to the envoy sidecar id:
 }
 ```
 
-The `X-Envoy-Peer-Metadata-Id` is the Istio HTTP metadata exchange header. These headers will be used for demo purposes, but Istio can be configured to strip the `x-envoy-metadata` headers for requests to service outside the mesh. You can disable this by configuring the meshConfig when installing Istio with:
+The `X-Envoy-Peer-Metadata-Id` is the Istio HTTP metadata exchange header. These headers will be used for demo purposes, but Istio can be configured to strip the `x-envoy-metadata` headers for requests to services outside the mesh. You can configure this in the meshConfig by installing Istio with:
 ```
   meshConfig:
     defaultConfig:
@@ -174,7 +174,7 @@ spec:
 EOF
 ```
 
-2. Send an http request as before:
+2. Send an HTTP request as before:
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
@@ -317,14 +317,14 @@ metadata:
   name: istio-egressgateway
 spec:
   selector:
-    istio: egressgateway # Selector for the egress gateway pod
+    istio: egressgateway # selector for the egress gateway pod
   servers:
   - port:
       number: 443
       name: https
       protocol: HTTPS
     hosts:
-    - httpbin.org # Host for which this Gateway applies
+    - httpbin.org # host for which this Gateway applies
     tls:
       mode: ISTIO_MUTUAL
 ---
@@ -365,12 +365,12 @@ spec:
   - match:
     - gateways:
       - istio-egressgateway
-      port: 443
+      port: 443 # new Gateway port
     route:
     - destination:
         host: httpbin.org
         port:
-          number: 443 # new Gateway port
+          number: 443
 EOF
 ```
 
@@ -419,7 +419,7 @@ istio-egressgateway-75c5457c56-htpvz   1/1     Running   0          33m   10.244
 
 <img src=passthrough-egress.png>
 
-This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS. Traffic leaving via the egress gateway will perform SNI passthrough instead of TLS terminatation for requests. 
+This setup is useful when you want to enforce policies and monitor egress traffic while allowing the destination to manage its own TLS. Traffic leaving via the egress gateway will perform SNI passthrough instead of TLS termination for requests. 
 
 1. Modify the Gateway to use `PASSTHROUGH` instead of terminating the HTTPS connection from the sidecar. This change also means we'll need to delete the DestinationRule so that the sidecar will not attempt an mTLS connection with the gateway. As such, we'll need to send an HTTPS request from the curl pod ourselves, which means the VirtualService will need a `tls` block instead of an `http` one:
 
@@ -456,7 +456,7 @@ spec:
   - match:
     - gateways:
       - mesh
-      port: 443 # now the https port, since we'll send an https request
+      port: 443 # now the HTTPS port, since we'll send an HTTPS request
       sniHosts: # specify the SNI for validation and routing at the egress gateway
       - httpbin.org
     route:
@@ -479,7 +479,7 @@ EOF
 kubectl delete destinationrule mtls-to-gateway
 ```
 
-2. Send a request using https:
+2. Send a request using HTTPS:
 
 ```shell
 kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
@@ -495,7 +495,7 @@ Let's delete that DestinationRule:
 kubectl delete destinationrule originate-tls-for-httpbin
 ```
 
-4. Now let's try the https request again:
+4. Now let's try the HTTPS request again:
 ```shell
 kubectl exec curl -c curl -- curl -sS https://httpbin.org/headers
 ```
@@ -536,7 +536,7 @@ Note: For this example, if you are continuing from a previous step make sure to 
 kubectl apply -f mtls-egress-switch-to-http.yaml
 ```
 
-2. Send the http request as before
+2. Send the HTTP request as before
 
 ```shell
 kubectl exec curl -c curl -- curl -sS http://httpbin.org/headers
